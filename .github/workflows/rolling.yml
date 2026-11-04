@@ -8,7 +8,7 @@ concurrency:
 permissions:
   contents: write
 jobs:
-  release:
+  build-gnu:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,6 +16,38 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --locked
       - run: tar czf twyla-x86_64-unknown-linux-gnu.tar.gz -C target/release twyla
+      - uses: actions/upload-artifact@v4
+        with:
+          name: twyla-x86_64-unknown-linux-gnu.tar.gz
+          path: twyla-x86_64-unknown-linux-gnu.tar.gz
+
+  build-musl:
+    runs-on: ubuntu-latest
+    container: alpine:3.21
+    steps:
+      - name: Install dependencies
+        run: apk add --no-cache git curl build-base openssl-dev openssl-libs-static perl
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: |
+          curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - run: cargo build --release --locked
+      - run: tar czf twyla-x86_64-unknown-linux-musl.tar.gz -C target/release twyla
+      - uses: actions/upload-artifact@v4
+        with:
+          name: twyla-x86_64-unknown-linux-musl.tar.gz
+          path: twyla-x86_64-unknown-linux-musl.tar.gz
+
+  release:
+    needs: [build-gnu, build-musl]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -25,14 +57,4 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "Latest (main)" \
             --notes "Rolling build from $GITHUB_SHA" \
-            twyla-x86_64-unknown-linux-gnu.tar.gz
-      # Build twyla.dev with the binary we just compiled, so the site always
-      # reflects this exact commit (no waiting on a separate release pickup).
-      # --test-examples gates the deploy: a broken example/code block fails here.
-      - run: ./target/release/twyla build --root doc --base-url https://twyla.dev --reflect --test-examples
-      - name: Deploy doc/public to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy doc/public --project-name=twyla --branch=main
+            artifacts/*.tar.gz
